@@ -10,6 +10,8 @@ type FetchState =
   | { status: 'error'; message: string }
   | { status: 'success'; matches: Match[]; round: number };
 
+export type Filter = 'all' | 'upcoming' | 'finished';
+
 // Сортировка: по startsAt по возрастанию, null в конец.
 // Infinity больше любого timestamp, поэтому m7 (postponed без даты) уезжает вниз
 function sortMatches(matches: Match[]): Match[] {
@@ -21,8 +23,8 @@ function sortMatches(matches: Match[]): Match[] {
 
 export function MatchesScreen() {
   const [state, setState] = useState<FetchState>({ status: 'loading' });
-  // Триггер повторной загрузки для кнопки "Повторить"
-  const [reloadKey, setReloadKey] = useState(0);
+  const [reloadKey, setReloadKey] = useState(0); //* Триггер повторной загрузки для кнопки "Повторить"
+  const [filter, setFilter] = useState<Filter>('all'); //* Состояние для фильтра, по умолчанию = все матчи
 
   const load = useCallback(async (signal: AbortSignal) => {
     setState({ status: 'loading' });
@@ -74,9 +76,37 @@ export function MatchesScreen() {
       );
 
     case 'success': {
-      const sortedMatches = sortMatches(state.matches);
-      return (
+      const filtered = state.matches.filter((match) => {
+        if (filter === 'all') return true;
+        if (filter === 'finished') return match.status === 'finished';
+                return match.status !== 'finished';
+      });
+      
+      const sortedMatches = sortMatches(filtered);
+return (
         <View style={styles.container}>
+          {/* Панель фильтров */}
+          <View style={styles.filtersRow}>
+            {(['all', 'upcoming', 'finished'] as const).map((f) => {
+              const label = f === 'all' ? 'Все' : f === 'upcoming' ? 'Предстоящие' : 'Завершённые';
+              const isActive = filter === f;
+              
+              return (
+                <Pressable
+                  key={f}
+                  onPress={() => setFilter(f)}
+                  style={[styles.filterButton, isActive && styles.filterButtonActive]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: isActive }}
+                >
+                  <Text style={[styles.filterText, isActive && styles.filterTextActive]}>
+                    {label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
           <FlatList
             data={sortedMatches}
             keyExtractor={(item) => item.id}
@@ -86,7 +116,7 @@ export function MatchesScreen() {
             ListHeaderComponent={<Text style={styles.title}>Тур {state.round}</Text>}
             ListEmptyComponent={
               <View style={styles.center}>
-                <Text style={styles.muted}>Матчей пока нет</Text>
+                <Text style={styles.muted}>В этой категории матчей нет</Text>
               </View>
             }
           />
@@ -112,4 +142,31 @@ const styles = StyleSheet.create({
     backgroundColor: '#ef3124',
   },
   buttonText: { color: 'white', fontWeight: '600' },
+
+  // Стили для панели фильтров
+  filtersRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  filterButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    backgroundColor: '#f3f4f6',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  filterButtonActive: {
+    backgroundColor: '#ef3124',
+    borderColor: '#ef3124',
+  },
+  filterText: {
+    fontSize: 14,
+    color: '#4b5563',
+    fontWeight: '500',
+  },
+  filterTextActive: {
+    color: 'white',
+  },
 });
