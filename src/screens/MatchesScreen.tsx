@@ -4,6 +4,7 @@ import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from '
 import { MatchCard } from '../components/MatchCard';
 import { MATCHES_URL } from '../config';
 import type { Match, MatchesResponse } from '../types';
+import { UpdatedAgo } from '../components/UpdatedAgo';
 
 type FetchState =
   | { status: 'loading' }
@@ -25,23 +26,36 @@ export function MatchesScreen() {
   const [state, setState] = useState<FetchState>({ status: 'loading' });
   const [reloadKey, setReloadKey] = useState(0); //* Триггер повторной загрузки для кнопки "Повторить"
   const [filter, setFilter] = useState<Filter>('all'); //* Состояние для фильтра, по умолчанию = все матчи
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async (signal: AbortSignal) => {
-    setState({ status: 'loading' });
-    try {
-      // cache: 'no-store', чтобы GitHub raw не отдавал кеш 5 минут (работает в вебе)
-      const response = await fetch(MATCHES_URL, { signal, cache: 'no-store' });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+  const load = useCallback(
+    async (signal: AbortSignal, mode: 'initial' | 'refresh' = 'initial') => {
+      // При refresh НЕ сбрасываем в loading, иначе список мигнёт и пропадёт.
+      if (mode === 'initial') {
+        setState({ status: 'loading' });
       }
-      const data = (await response.json()) as MatchesResponse;
-      setState({ status: 'success', matches: data.matches, round: data.round });
-    } catch (error) {
-      if (signal.aborted) return; // отмена при размонтировании не ошибка
-      const message = error instanceof Error ? error.message : 'Не удалось загрузить данные';
-      setState({ status: 'error', message });
-    }
-  }, []);
+      try {
+        const response = await fetch(MATCHES_URL, { signal, cache: 'no-store' });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = (await response.json()) as MatchesResponse;
+        setState({ status: 'success', matches: data.matches, round: data.round });
+        setLastUpdated(new Date()); // обновляем «момент последней загрузки»
+      } 
+      catch (error) {
+        if (signal.aborted) return;
+        // При ошибке оставляем старые данные на экране
+        if (mode === 'initial') {
+          const message = error instanceof Error ? error.message : 'Не удалось загрузить данные';
+          setState({ status: 'error', message });
+        }
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -50,6 +64,12 @@ export function MatchesScreen() {
   }, [load, reloadKey]);
 
   const handleRetry = () => setReloadKey((k) => k + 1);
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    const controller = new AbortController();
+    load(controller.signal, 'refresh').finally(() => setRefreshing(false));
+  };
 
   switch (state.status) {
     case 'loading':
@@ -79,18 +99,39 @@ export function MatchesScreen() {
       const filtered = state.matches.filter((match) => {
         if (filter === 'all') return true;
         if (filter === 'finished') return match.status === 'finished';
-                return match.status !== 'finished';
+        return match.status !== 'finished';
       });
-      
+
       const sortedMatches = sortMatches(filtered);
-return (
+
+      return (
         <View style={styles.container}>
+          {/* Шапка: заголовок + «Обновлено N сек назад» */}
+          <View style={styles.header}>
+            <Text style={styles.title}>Тур {state.round}</Text>
+            <View style={styles.headerRight}>
+              {lastUpdated && <UpdatedAgo since={lastUpdated} />}
+              <Pressable
+                onPress={handleRefresh}
+                style={styles.refreshButton}
+                accessibilityRole="button"
+                accessibilityLabel="Обновить данные"
+                disabled={refreshing}
+              >
+                <Text style={styles.refreshText}>
+                  {refreshing ? 'Обновление…' : 'Обновить'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+
           {/* Панель фильтров */}
           <View style={styles.filtersRow}>
             {(['all', 'upcoming', 'finished'] as const).map((f) => {
-              const label = f === 'all' ? 'Все' : f === 'upcoming' ? 'Предстоящие' : 'Завершённые';
+              const label =
+                f === 'all' ? 'Все' : f === 'upcoming' ? 'Предстоящие' : 'Завершённые';
               const isActive = filter === f;
-              
+
               return (
                 <Pressable
                   key={f}
@@ -113,7 +154,10 @@ return (
             renderItem={({ item }) => <MatchCard match={item} />}
             contentContainerStyle={styles.listContent}
             ItemSeparatorComponent={() => <View style={styles.separator} />}
-            ListHeaderComponent={<Text style={styles.title}>Тур {state.round}</Text>}
+            // Pull-to-refresh: на iOS/Android пользователь тянет список вниз.
+            // В вебе этот жест не работает — там нужна явная кнопка (см. ниже).
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
             ListEmptyComponent={
               <View style={styles.center}>
                 <Text style={styles.muted}>В этой категории матчей нет</Text>
@@ -127,6 +171,17 @@ return (
 }
 
 const styles = StyleSheet.create({
+  header: { marginBottom: 12 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 },
+  refreshText: { fontSize: 13, color: '#ef3124', fontWeight: '600' },
+  refreshButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+  },
   container: { flex: 1, padding: 16 },
   listContent: { paddingBottom: 24, flexGrow: 1 },
   separator: { height: 8 },
